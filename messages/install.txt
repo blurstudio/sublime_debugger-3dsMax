@@ -1,0 +1,7 @@
+---------------------------------------------------------------
+                       Debugger-3DSMax
+---------------------------------------------------------------
+
+Thanks for installing the debug adapter for running Python in 
+3DS Max. Please ensure you have the "Debugger" plugin installed. 
+If not, please install it and restart Sublime before continuing.
