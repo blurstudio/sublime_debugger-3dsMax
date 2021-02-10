@@ -12,7 +12,7 @@ import sublime
 import time
 
 
-adapter_type = "3DSMPy2"  # NOTE: type name must be unique to each adapter
+adapter_type = "3dsMax"  # NOTE: type name must be unique to each adapter
 package_path = dirname(abspath(__file__))
 adapter_path = join(package_path, "adapter")
 

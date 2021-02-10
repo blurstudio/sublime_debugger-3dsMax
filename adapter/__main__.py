@@ -9,29 +9,25 @@ It is inspired by various packages, namely:
 
 """
 
+from interface import DebuggerInterface
 from tempfile import gettempdir
-from interface import debugger_queue, start_response_thread, read_debugger_input
 from queue import Queue
 from util import *
 import winapi
 import socket
 import json
-import time
-import sys
-import os
 
+interface = None
 
 # The 3DS Max window handle
 window = None
 
-signal_location = join(dirname(abspath(__file__)), 'finished.txt')
-last_seq = -1
-
 processed_seqs = []
 run_code = ""
+last_seq = -1
 
 ptvsd_send_queue = Queue()
-ptvsd_socket: socket.socket
+ptvsd_socket = None
 
 
 # Avoiding stalls
@@ -51,14 +47,12 @@ def main():
     then remains in a loop reading messages from debugger.
     """
 
+    global interface
+
     find_max_window()
 
-    if os.path.exists(signal_location):
-        os.remove(signal_location)
-
-    start_response_thread()
-
-    read_debugger_input(on_receive_from_debugger)
+    interface = DebuggerInterface(on_receive=on_receive_from_debugger)
+    interface.start()
 
 
 def on_receive_from_debugger(message):
@@ -78,7 +72,7 @@ def on_receive_from_debugger(message):
     
     if cmd == 'initialize':
         # Run init request once max connection is established and send success response to the debugger
-        debugger_queue.put(json.dumps(json.loads(INITIALIZE_RESPONSE)))  # load and dump to remove indents
+        interface.send(json.dumps(json.loads(INITIALIZE_RESPONSE)))  # load and dump to remove indents
         processed_seqs.append(contents['seq'])
         pass
     
@@ -204,8 +198,7 @@ def attach_to_max(contents: dict):
 
     run_code = RUN_TEMPLATE.format(
         dir=dirname(config['program']),
-        file_name=split(config['program'])[1][:-3] or basename(split(config['program'])[0])[:-3],
-        signal_location=signal_location.replace('\\', '\\\\')
+        file_name=split(config['program'])[1][:-3] or basename(split(config['program'])[0])[:-3]
     )
 
     # then send attach code
@@ -216,26 +209,6 @@ def attach_to_max(contents: dict):
 
     # Then start the max debugging threads
     run(start_debugging, ((config['ptvsd']['host'], int(config['ptvsd']['port'])),))
-
-    # And finally wait for the signal from ptvsd that debugging is done
-    run(wait_for_signal)
-
-
-def wait_for_signal():
-    """
-    Waits for the signal location to exist, which means debugging is done.
-    Deletes the signal location and prepares this adapter for disconnect.
-    """
-
-    global disconnecting
-
-    while True:
-        
-        if os.path.exists(signal_location):
-            log('--- FINISHED DEBUGGING ---')
-
-            os.remove(signal_location)
-            run(disconnect)
 
 
 def start_debugging(address):
@@ -369,10 +342,10 @@ def on_receive_from_ptvsd(message):
 
         if stashed_event:
             log('Received from ptvsd:', message)
-            debugger_queue.put(message)
+            interface.send(message)
 
             log('Sending stashed message:', stashed_event)
-            debugger_queue.put(stashed_event)
+            interface.send(stashed_event)
 
             stashed_event = None
             return
@@ -383,29 +356,7 @@ def on_receive_from_ptvsd(message):
         log("Already processed, ptvsd response is:", message)
     else:
         log('Received from ptvsd:', message)
-        debugger_queue.put(message)
-
-
-def disconnect():
-    """
-    Clean things up by unblocking (and killing) all threads, then exit
-    """
-
-    # Unblock and kill the send threads
-    debugger_queue.put(None)
-    while debugger_queue.qsize() != 0:
-        time.sleep(0.1)
-    
-    ptvsd_send_queue.put(None)
-    while ptvsd_send_queue.qsize() != 0:
-        time.sleep(0.1)
-
-    # Close ptvsd socket and stdin so readline() functions unblock
-    ptvsd_socket.close()
-    sys.stdin.close()
-
-    # exit all threads
-    os._exit(0)
+        interface.send(message)
 
 
 if __name__ == '__main__':

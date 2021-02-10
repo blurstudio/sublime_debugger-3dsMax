@@ -65,8 +65,6 @@ try:
         reload({file_name})
 
     print(' --- Finished debugging {file_name} --- \\n')
-
-    open("{signal_location}", "w").close()  # Create this file to let the adapter know debugging is finished
     
 except Exception as e:
     print('Error while debugging: ' + str(e))
