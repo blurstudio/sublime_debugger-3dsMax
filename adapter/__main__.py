@@ -181,7 +181,7 @@ def send_py_code_to_max(code):
         raise Exception("Could not send vital code to Max due to error:\n\n" + str(e))
 
 
-def attach_to_max(contents: dict):
+def attach_to_max(contents):
     """
     Defines commands to send to Max, establishes a connection to its commandPort,
     then sends the code to inject ptvsd
