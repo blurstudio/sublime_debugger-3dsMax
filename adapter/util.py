@@ -3,6 +3,14 @@ from os.path import abspath, join, dirname, basename, split
 from threading import Timer
 from datetime import datetime
 import json
+import sys
+
+
+# Import correct Queue
+if (sys.version_info[0] == 3):
+    from queue import Queue
+else:  # Python 2
+    from multiprocessing import Queue
 
 #  Debugging this adapter
 debug = True
@@ -11,7 +19,7 @@ log_file = abspath(join(dirname(__file__), 'log.txt'))
 if debug:
     open(log_file, 'w+').close()  # Creates and/or clears the file
 
-ptvsd_path = join(abspath(dirname(__file__)), "python")
+debugpy_path = join(abspath(dirname(__file__)), "python")
 
 
 # --- Utility functions --- #
@@ -40,15 +48,19 @@ RECORDER_NOT_FOUND = "Could not find MAXScript Macro Recorder"
 ATTACH_TEMPLATE = """
 import sys
 import os
-ptvsd_module = r"{ptvsd_path}"
-if ptvsd_module not in sys.path:
-    sys.path.insert(0, ptvsd_module)
+debugy_module = r"{debugy_path}"
+if debugy_module not in sys.path:
+    sys.path.insert(0, debugy_module)
 
-import ptvsd
+import debugpy
 
-ptvsd.enable_attach(("{hostname}",{port}))
-
-print('\\n --- Successfully attached to Sublime Debugger --- \\n')
+try:
+    debugpy.configure(python="{interpreter}")
+    debugpy.listen(("{hostname}",{port}))
+except RuntimeError:
+    x=1
+finally:
+    sys.stderr.write("\\n\\nConnection to Sublime Debugger is active.\\n\\n")
 """
 
 # Used to run the module

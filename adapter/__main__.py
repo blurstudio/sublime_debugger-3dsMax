@@ -9,10 +9,12 @@ It is inspired by various packages, namely:
 
 """
 
+from util import (Queue, log, run, dirname, debugpy_path, join, split,
+                  basename, ATTACH_TEMPLATE, ATTACH_ARGS, RUN_TEMPLATE, 
+                  INITIALIZE_RESPONSE, TITLE_IDENTIFIER, CONTENT_HEADER,
+                  RECORDER_NOT_FOUND, PAUSE_REQUEST )
 from interface import DebuggerInterface
 from tempfile import gettempdir
-from queue import Queue
-from util import *
 import winapi
 import socket
 import json
@@ -24,21 +26,9 @@ window = None
 
 processed_seqs = []
 run_code = ""
-last_seq = -1
 
-ptvsd_send_queue = Queue()
-ptvsd_socket = None
-
-
-# Avoiding stalls
-inv_seq = 9223372036854775806  # The maximum int value in Python 2, -1  (hopefully never gets reached)
-artificial_seqs = []  # keeps track of which seqs we have sent
-waiting_for_pause_event = False
-
-avoiding_continue_stall = False
-stashed_event = None
-
-disconnecting = False
+debugpy_send_queue = Queue()
+debugpy_socket = None
 
 
 def main():
@@ -58,13 +48,10 @@ def main():
 def on_receive_from_debugger(message):
     """
     Intercept the initialize and attach requests from the debugger
-    while ptvsd is being set up
+    while debugpy is being set up
     """
 
-    global last_seq, avoiding_continue_stall
-
     contents = json.loads(message)
-    last_seq = contents.get('seq')
 
     log('Received from Debugger:', message)
 
@@ -80,12 +67,12 @@ def on_receive_from_debugger(message):
         # time to attach to max
         run(attach_to_max, (contents,))
 
-        # Change arguments to valid ones for ptvsd
+        # Change arguments to valid ones for debugpy
         config = contents['arguments']
         new_args = ATTACH_ARGS.format(
             dir=dirname(config['program']).replace('\\', '\\\\'),
-            hostname=config['ptvsd']['host'],
-            port=int(config['ptvsd']['port']),
+            hostname=config['debugpy']['host'],
+            port=int(config['debugpy']['port']),
             filepath=config['program'].replace('\\', '\\\\')
         )
 
@@ -94,12 +81,9 @@ def on_receive_from_debugger(message):
         message = json.dumps(contents)  # update contents to reflect new args
 
         log("New attach arguments loaded:", new_args)
-    
-    elif cmd == 'continue':
-        avoiding_continue_stall = True
 
-    # Then just put the message in the ptvsd queue
-    ptvsd_send_queue.put(message)
+    # Then just put the message in the debugpy queue
+    debugpy_send_queue.put(message)
 
 
 def find_max_window():
@@ -184,16 +168,16 @@ def send_py_code_to_max(code):
 def attach_to_max(contents):
     """
     Defines commands to send to Max, establishes a connection to its commandPort,
-    then sends the code to inject ptvsd
+    then sends the code to inject debugpy
     """
 
     global run_code
     config = contents['arguments']
 
     attach_code = ATTACH_TEMPLATE.format(
-        ptvsd_path=ptvsd_path,
-        hostname=config['ptvsd']['host'],
-        port=int(config['ptvsd']['port'])
+        debugpy_path=debugpy_path,
+        hostname=config['debugpy']['host'],
+        port=int(config['debugpy']['port'])
     )
 
     run_code = RUN_TEMPLATE.format(
@@ -208,25 +192,25 @@ def attach_to_max(contents):
     log('Successfully attached to Max')
 
     # Then start the max debugging threads
-    run(start_debugging, ((config['ptvsd']['host'], int(config['ptvsd']['port'])),))
+    run(start_debugging, ((config['debugpy']['host'], int(config['debugpy']['port'])),))
 
 
 def start_debugging(address):
     """
-    Connects to ptvsd in Max, then starts the threads needed to
+    Connects to debugpy in Max, then starts the threads needed to
     send and receive information from it
     """
 
     log("Connecting to " + address[0] + ":" + str(address[1]))
 
-    global ptvsd_socket
-    ptvsd_socket = socket.create_connection(address)
+    global debugpy_socket
+    debugpy_socket = socket.create_connection(address)
 
     log("Successfully connected to Max for debugging. Starting...")
 
-    run(ptvsd_send_loop)  # Start sending requests to ptvsd
+    run(debugpy_send_loop)  # Start sending requests to debugpy
 
-    fstream = ptvsd_socket.makefile()
+    fstream = debugpy_socket.makefile()
 
     while True:
         try:
@@ -249,113 +233,53 @@ def start_debugging(address):
 
                 if content_length == 0:
                     message = total_content
-                    on_receive_from_ptvsd(message)
+                    on_receive_from_debugpy(message)
 
         except Exception as e:
-            log("Failure reading Max's ptvsd output: \n" + str(e))
-            ptvsd_socket.close()
+            log("Failure reading Max's debugpy output: \n" + str(e))
+            debugpy_socket.close()
             break
 
 
-def ptvsd_send_loop():
+def debugpy_send_loop():
     """
     The loop that waits for items to show in the send queue and prints them.
     Blocks until an item is present
     """
 
     while True:
-        msg = ptvsd_send_queue.get()
+        msg = debugpy_send_queue.get()
         if msg is None:
             return
         else:
             try:
-                ptvsd_socket.send(bytes('Content-Length: {}\r\n\r\n'.format(len(msg)), 'UTF-8'))
-                ptvsd_socket.send(bytes(msg, 'UTF-8'))
-                log('Sent to ptvsd:', msg)
+                debugpy_socket.send(bytes('Content-Length: {}\r\n\r\n'.format(len(msg)), 'UTF-8'))
+                debugpy_socket.send(bytes(msg, 'UTF-8'))
+                log('Sent to debugpy:', msg)
             except OSError:
                 log("Debug socket closed.")
                 return
 
 
-def on_receive_from_ptvsd(message):
+def on_receive_from_debugpy(message):
     """
-    Handles messages going from ptvsd to the debugger
+    Handles messages going from debugpy to the debugger
     """
-
-    global inv_seq, artificial_seqs, waiting_for_pause_event, avoiding_continue_stall, stashed_event
 
     c = json.loads(message)
     seq = int(c.get('request_seq', -1))  # a negative seq will never occur
     cmd = c.get('command', '')
 
     if cmd == 'configurationDone':
-        # When Debugger & ptvsd are done setting up, send the code to debug
+        # When Debugger & debugpy are done setting up, send the code to debug
         send_py_code_to_max(run_code)
-    
-    elif cmd == "variables":
-        # Hide the __builtins__ variable (causes errors in the debugger gui)
-        vars = c['body'].get('variables')
-        if vars:
-            toremove = []
-            for var in vars:
-                if var['name'] in ('__builtins__', '__doc__', '__file__', '__name__', '__package__'):
-                    toremove.append(var)
-            for var in toremove:
-                vars.remove(var)
-            message = json.dumps(c)
-    
-    elif c.get('event', '') == 'stopped' and c['body'].get('reason', '') == 'step':
-        # Sometimes (often) ptvsd stops on steps, for an unknown reason.
-        # Respond to this with a forced pause to put things back on track.
-        log("Stall detected. Sending unblocking command to ptvsd.")
-        req = PAUSE_REQUEST.format(seq=inv_seq)
-        ptvsd_send_queue.put(req)
-        artificial_seqs.append(inv_seq)
-        inv_seq -= 1
-
-        # We don't want the debugger to know ptvsd stalled, so pretend it didn't.
-        return
-    
-    elif seq in artificial_seqs:
-        # Check for success, then do nothing and wait for pause event to show up
-        if c.get('success', False): 
-            waiting_for_pause_event = True
-        else:
-            log("Stall could not be recovered.")
-        return
-        
-    elif waiting_for_pause_event and c.get('event', '') == 'stopped' and c['body'].get('reason', '') == 'pause':
-        # Set waiting for pause event to false and change the reason for the stop to be a step. 
-        # Debugging can operate normally again
-        waiting_for_pause_event = False
-        c['body']['reason'] = 'step'
-        message = json.dumps(c)
-    
-    elif avoiding_continue_stall and c.get('event', '') == 'stopped' and c['body'].get('reason', '') == 'breakpoint':
-        # temporarily hold this message to send only after the continued event is received
-        log("Temporarily stashed: ", message)
-        stashed_event = message
-        return
-    
-    elif avoiding_continue_stall and c.get('event', '') == 'continued':
-        avoiding_continue_stall = False
-
-        if stashed_event:
-            log('Received from ptvsd:', message)
-            interface.send(message)
-
-            log('Sending stashed message:', stashed_event)
-            interface.send(stashed_event)
-
-            stashed_event = None
-            return
 
     # Send responses and events to debugger
     if seq in processed_seqs:
         # Should only be the initialization request
-        log("Already processed, ptvsd response is:", message)
+        log("Already processed, debugpy response is:", message)
     else:
-        log('Received from ptvsd:', message)
+        log('Received from debugpy:', message)
         interface.send(message)
 
 

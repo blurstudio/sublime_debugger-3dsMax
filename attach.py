@@ -10,6 +10,7 @@ from os.path import join, abspath, dirname
 from threading import Timer
 import sublime
 import time
+import sys
 
 
 adapter_type = "3dsMax"  # NOTE: type name must be unique to each adapter
@@ -31,7 +32,8 @@ config_snippets = [
             "type": adapter_type,
             "program": "\${file\}",
             "request": "attach",  # can only be attach or launch
-            "ptvsd":  # The host/port used to communicate with ptvsd in maya
+            "interpreter": sys.executable,
+            "debugpy":  # The host/port used to communicate with debugpy in maya
             {
                 "host": "localhost",
                 "port": 7003
@@ -43,12 +45,12 @@ config_snippets = [
 # The settings used by the Debugger to run the adapter.
 settings = {
     "type": adapter_type,
-    "command": ["python", adapter_path]
+    "command": [sys.executable, adapter_path]
 }
 
 # Instantiate variables needed for checking thread
 running = False
-check_speed = 5  # number of seconds to wait between checks for adapter presence in debugger instances
+check_speed = 3  # number of seconds to wait between checks for adapter presence in debugger instances
 
 
 def check_for_adapter():
