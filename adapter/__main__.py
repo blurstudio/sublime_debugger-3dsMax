@@ -41,6 +41,7 @@ def main():
 
     find_max_window()
 
+    # Create and start the interface with the debugger
     interface = DebuggerInterface(on_receive=on_receive_from_debugger)
     interface.start()
 
@@ -51,20 +52,21 @@ def on_receive_from_debugger(message):
     while debugpy is being set up
     """
 
+    # Load message contents into a dictionary
     contents = json.loads(message)
 
     log('Received from Debugger:', message)
 
+    # Get the type of command the debugger sent
     cmd = contents['command']
     
     if cmd == 'initialize':
         # Run init request once max connection is established and send success response to the debugger
         interface.send(json.dumps(json.loads(INITIALIZE_RESPONSE)))  # load and dump to remove indents
         processed_seqs.append(contents['seq'])
-        pass
     
     elif cmd == 'attach':
-        # time to attach to max
+        # time to attach to Max
         run(attach_to_max, (contents,))
 
         # Change arguments to valid ones for debugpy
@@ -76,6 +78,7 @@ def on_receive_from_debugger(message):
             filepath=config['program'].replace('\\', '\\\\')
         )
 
+        # Update the message with the new arguments to then be sent to debugpy
         contents = contents.copy()
         contents['arguments'] = json.loads(new_args)
         message = json.dumps(contents)  # update contents to reflect new args
@@ -97,18 +100,22 @@ def find_max_window():
     global window
 
     if window is None:
+        # finds the window if it hasn't been found already
         window = winapi.Window.find_window(TITLE_IDENTIFIER)
 
     if window is None:
+        # Raising exceptions shows the text in the Debugger's output.
+        # Raise an error to show a potential solution to this problem.
         raise Exception("""
     
 
-        An Autodesk 3ds Max instance could not be found.
+                A 3ds Max instance could not be found.
         Please make sure it is open and running, then try again.
 
         """)
 
     try:
+        # MXS_Scintilla is the identifier for the mini macrorecorder in the bottom left
         window.find_child(text=None, cls="MXS_Scintilla")
     except OSError:
         # Window handle is invalid, 3ds Max has probably been closed.
@@ -155,14 +162,16 @@ def send_py_code_to_max(code):
         if minimacrorecorder is None:
             raise Exception(RECORDER_NOT_FOUND)
 
+        # Encode the command to bytes, send to the mmr, then send 
+        # the return key to simulate enter being pressed.
         cmd = cmd.encode("utf-8")  # Needed for ST3!
         minimacrorecorder.send(winapi.WM_SETTEXT, 0, cmd)
         minimacrorecorder.send(winapi.WM_CHAR, winapi.VK_RETURN, 0)
         minimacrorecorder = None
     
     except Exception as e:
-
-        raise Exception("Could not send vital code to Max due to error:\n\n" + str(e))
+        # Raise an error to terminate the adapter
+        raise Exception("Could not send code to Max due to error:\n\n" + str(e))
 
 
 def attach_to_max(contents):
@@ -174,12 +183,16 @@ def attach_to_max(contents):
     global run_code
     config = contents['arguments']
 
+    # Format the simulated attach response to send it back to the debugger
+    # while we set up the debugpy in the background
     attach_code = ATTACH_TEMPLATE.format(
         debugpy_path=debugpy_path,
         hostname=config['debugpy']['host'],
         port=int(config['debugpy']['port'])
     )
 
+    # Format RUN_TEMPLATE to point to the temporary
+    # file containing the code to run
     run_code = RUN_TEMPLATE.format(
         dir=dirname(config['program']),
         file_name=split(config['program'])[1][:-3] or basename(split(config['program'])[0])[:-3]
@@ -188,7 +201,6 @@ def attach_to_max(contents):
     # then send attach code
     log('Sending attach code to Max')
     send_py_code_to_max(attach_code)
-
     log('Successfully attached to Max')
 
     # Then start the max debugging threads
@@ -203,17 +215,22 @@ def start_debugging(address):
 
     log("Connecting to " + address[0] + ":" + str(address[1]))
 
+    # Create the socket used to communicate with debugpy
     global debugpy_socket
     debugpy_socket = socket.create_connection(address)
 
     log("Successfully connected to Max for debugging. Starting...")
 
-    run(debugpy_send_loop)  # Start sending requests to debugpy
+    # Start a thread that sends requests to debugpy
+    run(debugpy_send_loop)
 
+    # Make a file to read debugpy's responses line-by-line
     fstream = debugpy_socket.makefile()
 
     while True:
         try:
+            # Wait for the CONTENT_HEADER to show up,
+            # then get the length of the content following it
             content_length = 0
             while True:
                 header = fstream.readline()
@@ -224,6 +241,7 @@ def start_debugging(address):
                 if header.startswith(CONTENT_HEADER):
                     content_length = int(header[len(CONTENT_HEADER):])
 
+            # Read the content of the response, then call the callback
             if content_length > 0:
                 total_content = ""
                 while content_length > 0:
@@ -236,6 +254,8 @@ def start_debugging(address):
                     on_receive_from_debugpy(message)
 
         except Exception as e:
+            # Problem with socket. Close it then return
+
             log("Failure reading Max's debugpy output: \n" + str(e))
             debugpy_socket.close()
             break
@@ -248,12 +268,16 @@ def debugpy_send_loop():
     """
 
     while True:
+        # Get the first message off the queue
         msg = debugpy_send_queue.get()
         if msg is None:
+            # get() is blocking, so None means it was intentionally
+            # added to the queue to stop this loop, or that a problem occurred
             return
         else:
             try:
-                debugpy_socket.send(bytes('Content-Length: {}\r\n\r\n'.format(len(msg)), 'UTF-8'))
+                # First send the content header with the length of the message, then send the message
+                debugpy_socket.send(bytes(CONTENT_HEADER + '{}\r\n\r\n'.format(len(msg)), 'UTF-8'))
                 debugpy_socket.send(bytes(msg, 'UTF-8'))
                 log('Sent to debugpy:', msg)
             except OSError:
@@ -266,6 +290,7 @@ def on_receive_from_debugpy(message):
     Handles messages going from debugpy to the debugger
     """
 
+    # Load the message into a dictionary
     c = json.loads(message)
     seq = int(c.get('request_seq', -1))  # a negative seq will never occur
     cmd = c.get('command', '')
@@ -279,6 +304,7 @@ def on_receive_from_debugpy(message):
         # Should only be the initialization request
         log("Already processed, debugpy response is:", message)
     else:
+        # Send the message normally to the debugger
         log('Received from debugpy:', message)
         interface.send(message)
 
