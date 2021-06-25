@@ -1,6 +1,11 @@
 
 from Debugger.modules.typecheck import *
-import Debugger.modules.debugger.adapter as adapter
+
+# This import moves around based on the Debugger version being used
+try:
+	import Debugger.modules.debugger.adapter as adapter
+except:
+	import Debugger.modules.adapters.adapter as adapter
 
 from shutil import which
 import socket
@@ -171,6 +176,7 @@ class Max(adapter.AdapterConfiguration):
 		"""
 		
 		# Nothing to do when installing, just return
+		# Consider letting the user know this uses the Windows API and can seem hacky
 		pass
 
 	@property
